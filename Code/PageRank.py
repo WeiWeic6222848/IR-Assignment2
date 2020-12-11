@@ -22,7 +22,7 @@ def updateIteration(entry):
 
 
 def updateReduce(next):
-    N = 50000000
+    N = 875713
     # entry = ("0",[lijst outgoing])
     # PR(di) := /N + (1-)j=1..m PRj(di);
     # emit(key3: [di, PR(di)], value3: outlinks(di));
@@ -42,7 +42,7 @@ def updateReduce(next):
 
 
 def pageRank(data):
-    N = 50000000
+    N = 875713
     data = data.map(lambda x: ((x[0], 1 / N), x[1]))
 
     rold = None
@@ -62,13 +62,14 @@ def pageRank(data):
         print("Iteration ", iter, " just finished with diff: ", diff, " approximated elapsed time = ",
               (datetime.now() - timer).total_seconds())
 
-    result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False).collect()
-    print(result)
-    return True
+    #sort by descending order of page ranking values
+    result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False)
+    #print(result)
+    return result
 
 
 if __name__ == '__main__':
-    sc = SparkContext("local", "PageRanking")
+    sc = SparkContext("local[*]", "PageRanking")
 
     # filtering mini database to be of form (from node, list of to nodes)
     data = sc.textFile("./Dataset/web-Google.txt").filter(lambda l: not str(l).startswith("#")) \
@@ -76,5 +77,9 @@ if __name__ == '__main__':
         lambda x: x[0]).mapValues(lambda x: list(map(lambda y: y[1], x))).sortBy(lambda x: x[0])
     # (0,[]) <-
     # (score) <- rold
+    result = pageRank(data)
 
-    pageRank(data)
+    # write result to csv file
+    result = result.map(lambda line: str(line))
+    rankFile = open('ranking_google_0.15.csv', 'w')
+    rankFile.write("\n".join(result.collect()))
