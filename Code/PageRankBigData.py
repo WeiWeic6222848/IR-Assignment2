@@ -1,12 +1,10 @@
 import sys
 from datetime import datetime
 
-from py4j.java_gateway import JavaGateway
 from pyspark import SparkContext, SparkConf, StorageLevel
 from Config import teleportationProbability
-import os
 
-os.environ['JAVA_HOME'] = "C:\\Users\\c6222\\.jdks\\openjdk-15.0.1"
+
 N = 50000000
 deadendpool = 0.0
 
@@ -87,8 +85,6 @@ def pageRank(data):
 
     # sort by descending order of page ranking values
     result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False)
-    #print(result.map(lambda x:x[1]).sum())
-    # print(result)
     return result
 
 
@@ -112,18 +108,10 @@ if __name__ == '__main__':
         int(x[1]) - 1,
         list(map(lambda x: int(x), filter(lambda x: x != "" and int(x) <= 50000000, str(x[0]).split(" "))))))
 
-    # # (0,[]) <-
-    # # (score) <- rold
-
-    # filtering mini database to be of form (from node, list of to nodes)
-    # data = sc.textFile("./Dataset/web-Google.txt").filter(lambda l: not str(l).startswith("#")) \
-    #     .map(lambda x: x.split("\t")).map(lambda x: (int(x[0].strip()), int(x[1].strip()))).groupBy(
-    #     lambda x: x[0]).mapValues(lambda x: list(map(lambda y: int(y[1]), x)))
-
     result = pageRank(data)
 
     # write result to csv file (fails because OOM when collecting result.)
     result = result.map(lambda line: str(line)[1:-1])
-    rankFile = open('ranking_clueweb_0.15.csv', 'w')
+    rankFile = open('ranking_clueweb_'+str(teleportationProbability)+'.csv', 'w')
     rankFile.write("nodeID,pageRankScore\n")
     rankFile.write("\n".join(result.take(10000)))
