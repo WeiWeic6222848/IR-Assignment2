@@ -65,7 +65,7 @@ def pageRank(data):
             mapped1=rnew.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
             mapped2=rold.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
             diff=mapped1.join(mapped2).map(lambda x:abs(x[1][0]-x[1][1]))
-            diff=diff.sum()
+            diff=diff.max()
             print("Iteration ", iter, " just finished with first order norm: ", diff, " approximated elapsed time = ",
                  (datetime.now() - timer).total_seconds())
             mapped1.unpersist()
