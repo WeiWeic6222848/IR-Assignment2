@@ -1,10 +1,15 @@
 import sys
 from datetime import datetime
 
+from py4j.java_gateway import JavaGateway
 from pyspark import SparkContext, SparkConf, StorageLevel
 from Config import teleportationProbability
+import os
 
+os.environ['JAVA_HOME'] = "C:\\Users\\c6222\\.jdks\\openjdk-15.0.1"
 N = 50000000
+deadendpool = 0.0
+
 
 def updateIteration(entry):
     # entry = ("0",[lijst outgoing])
@@ -16,6 +21,11 @@ def updateIteration(entry):
     value1 = []
     for outlink in outlinks:
         value1.append((outlink, PR / n))
+
+    # if outlink is empty, add PR to the deadend pool
+    if (len(outlinks) == 0):
+        global deadendpool
+        deadendpool += PR
 
     value1.append((p, outlinks))
     return value1
@@ -36,7 +46,8 @@ def updateReduce(next):
         else:
             Outlinks = i
 
-    PR = teleportationProbability * 1 / N + (1 - teleportationProbability) * PRSum
+    global deadendpool
+    PR = teleportationProbability / N + (1 - teleportationProbability) * PRSum + (1-teleportationProbability) * deadendpool / N
     return ((p, PR), Outlinks)
 
 
@@ -48,30 +59,35 @@ def pageRank(data):
     iter = 0
     diff = sys.float_info.max
     eps = 0.000001
-    while diff>eps:
+    while diff > eps:
+
         timer = datetime.now()
+
+        global deadendpool
+        deadendpool = 0
         iter += 1
         rold = rnew
         rnew = rold.flatMap(updateIteration).groupByKey().map(updateReduce)
 
         # calculate difference?
-        if(iter>=0):
-            #persist both of the rdd to make sure a shuffle join happends, which doesn't cause timeout.
-            mapped1=rnew.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
-            mapped2=rold.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
-            diff=mapped1.join(mapped2).map(lambda x:abs(x[1][0]-x[1][1]))
-            diff=diff.sum()
+        if (iter >= 6):
+            # persist both of the rdd to make sure a shuffle join happends, which doesn't cause timeout.
+            mapped1 = rnew.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+            mapped2 = rold.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+            diff = mapped1.join(mapped2).map(lambda x: abs(x[1][0] - x[1][1]))
+            diff = diff.max()
             print("Iteration ", iter, " just finished with first order norm: ", diff, " approximated elapsed time = ",
-                 (datetime.now() - timer).total_seconds())
-            #unpersist to save space.
+                  (datetime.now() - timer).total_seconds())
+            # unpersist to save space.
             mapped1.unpersist()
             mapped2.unpersist()
         else:
             print("Iteration ", iter, " just finished, approximated elapsed time = ",
-                 (datetime.now() - timer).total_seconds())
+                  (datetime.now() - timer).total_seconds())
 
     # sort by descending order of page ranking values
     result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False)
+    #print(result.map(lambda x:x[1]).sum())
     # print(result)
     return result
 
@@ -79,28 +95,30 @@ def pageRank(data):
 if __name__ == '__main__':
     conf = SparkConf()
     conf.set("spark.network.timeout", "36001s")
-    conf.set("spark.executor.heartbeatInterval","36000s")
-    conf.set("spark.storage.blockManagerSlaveTimeoutMs","36000s")
-    conf.set("spark.worker.timeout","36000s")
-    conf.set("spark.sql.broadcastTimeout","36000s")
+    conf.set("spark.executor.heartbeatInterval", "36000s")
+    conf.set("spark.storage.blockManagerSlaveTimeoutMs", "36000s")
+    conf.set("spark.worker.timeout", "36000s")
+    conf.set("spark.sql.broadcastTimeout", "36000s")
     conf.set("spark.executor.memory", "5g")
-    conf.set("spark.driver.memory", "12g")
     conf.set("spark.executor.cores", "5")
+    conf.set("spark.driver.memory", "12g")
     conf.set("spark.worker.cleanup.enabled", "true")
-    sc = SparkContext("local[5]", "PageRanking",conf=conf)
+    sc = SparkContext(conf=conf)
 
-
-    # filtering mini database to be of form (from node, list of to nodes)
     data = sc.textFile("./Dataset/ClueWeb09_WG_50m.graph-txt").zipWithIndex()
 
-    #save the values as int to save space
-    data = data.filter(lambda x: int(x[1])!=0 and int(x[1])<=50000000).map(lambda x: (
-        int(x[1])-1, list(map(lambda x: int(x), filter(lambda x: x != "" and int(x) <= 50000000, str(x[0]).split(" "))))))
+    # save the values as int to save space
+    data = data.filter(lambda x: int(x[1]) != 0 and int(x[1]) <= 50000000).map(lambda x: (
+        int(x[1]) - 1,
+        list(map(lambda x: int(x), filter(lambda x: x != "" and int(x) <= 50000000, str(x[0]).split(" "))))))
 
     # # (0,[]) <-
     # # (score) <- rold
 
-
+    # filtering mini database to be of form (from node, list of to nodes)
+    # data = sc.textFile("./Dataset/web-Google.txt").filter(lambda l: not str(l).startswith("#")) \
+    #     .map(lambda x: x.split("\t")).map(lambda x: (int(x[0].strip()), int(x[1].strip()))).groupBy(
+    #     lambda x: x[0]).mapValues(lambda x: list(map(lambda y: int(y[1]), x)))
 
     result = pageRank(data)
 
@@ -108,4 +126,4 @@ if __name__ == '__main__':
     result = result.map(lambda line: str(line)[1:-1])
     rankFile = open('ranking_clueweb_0.15.csv', 'w')
     rankFile.write("nodeID,pageRankScore\n")
-    rankFile.write("\n".join(result.collect()))
+    rankFile.write("\n".join(result.take(10000)))
