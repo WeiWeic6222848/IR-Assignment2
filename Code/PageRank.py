@@ -57,7 +57,9 @@ def updateReduce(next):
 
 
 def pageRank(data):
-    # initial pagerank score
+    #x[0] = node x
+    #1/N = initial pagerank score
+    #x[1] = outlinks
     data = data.map(lambda x: ((x[0], 1 / N), x[1]))
 
     # initial variables
@@ -153,3 +155,16 @@ if __name__ == '__main__':
     rankFile = open('ranking_google_' + str(teleportationProbability) + '.csv', 'w')
     rankFile.write("nodeID,pageRankScore\n")
     rankFile.write("\n".join(result.collect()))
+"""
+nodeID,pageRankScore
+2, 0.7649856931847688
+1, 0.13909016063538882
+0, 0.0959241461798424
+"""
+
+"""
+0	1
+0	2
+1	0
+1	1
+"""
