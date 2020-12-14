@@ -7,34 +7,41 @@ from Config import teleportationProbability
 N = 875713
 deadendpool = 0
 
-def updateIteration(entry):
-    # entry = ("0",[lijst outgoing])
-    p = entry[0][0]
 
+def updateIteration(entry):
+    # entry = (node id,[lijst outgoing node])
+
+    # initialize variables
+    p = entry[0][0]
     n = len(entry[1])
     PR = float(entry[0][1])
     outlinks = entry[1]
 
+    # initialize return value
     value1 = []
+
+    # emit value for each outlink
     for outlink in outlinks:
         value1.append((outlink, PR / n))
 
-    if (len(outlinks)==0):
+    # if its a deadend, add score to accumulator
+    if (len(outlinks) == 0):
         deadendaccumulator.add(PR)
 
+    # emit own outlinks
     value1.append((p, outlinks))
     return value1
 
 
 def updateReduce(next):
-    # entry = ("0",[lijst outgoing])
-    # PR(di) := /N + (1-)j=1..m PRj(di);
-    # emit(key3: [di, PR(di)], value3: outlinks(di));
-    p = next[0]
+    # next = (node id, PR score)
 
+    # define the necessary viariables
+    p = next[0]
     PRlist = next[1]
     Outlinks = []
 
+    # calculate the sum without using reduce (because we need to find where the outlink is stored within the list)
     PRSum = 0
     for i in PRlist:
         if (not isinstance(i, list)):
@@ -42,48 +49,67 @@ def updateReduce(next):
         else:
             Outlinks = i
 
-    PR = teleportationProbability * 1 / N + (1 - teleportationProbability) * PRSum + (1-teleportationProbability) * deadendpool.value / N
+    # PR(di) := alpha/N + (1-alpha)PRsum; where alpha is the teleportation Probability
+    # PR also gets boosted by deadend scores in the form of (1-alpha) * PRscore of deadends / N
+    PR = teleportationProbability * 1 / N + (1 - teleportationProbability) * PRSum \
+         + (1 - teleportationProbability) * deadendpool.value / N
     return ((p, PR), Outlinks)
 
 
 def pageRank(data):
+    # initial pagerank score
     data = data.map(lambda x: ((x[0], 1 / N), x[1]))
 
+    # initial variables
     rold = None
     rnew = data
     iter = 0
+
+    # set initial error to be highest possible, and start iterating.
     diff = sys.float_info.max
     eps = 0.000001
-    while diff>eps:
-        timer = datetime.now()
-        iter += 1
-        rold = rnew
-        rnew = rold.flatMap(updateIteration)
+    while diff > eps:
+        timer = datetime.now()  # timer
 
+        iter += 1  # advance iteration counter for analytics
+
+        rold = rnew  # store old scores
+        rnew = rold.flatMap(updateIteration)  # flatmap the input to get a list of (node, PR score)
+
+        # deadend will get detected during the previous flatmap, and their values are accumulated in the accumulator.
+        # we're going to get the value, broadcast it into all the executors, then reset the accumulator for next
+        # iteration.
         global deadendpool
         val = deadendaccumulator.value
         deadendpool = sc.broadcast(val)
-        deadendaccumulator.add(-val) #reset deadendpool
+        deadendaccumulator.add(-val)  # reset deadendpool
 
-
+        # group the PR scores by key(node id), and sent it to the 'reduce' function which returns a new vector that
+        # can directly be used in the next iteration
         rnew = rnew.groupByKey().map(updateReduce)
-        #print(deadendpool)
 
-        # calculate difference?
-        if(iter>=0):
-            mapped1=rnew.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
-            mapped2=rold.map(lambda x:x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
-            #print(mapped2.map(lambda x:x[1]).sum())
-            diff=mapped1.join(mapped2)
-            diff=diff.map(lambda x:abs(x[1][0]-x[1][1]))
-            diff=diff.max()
+        # calculate difference after the given iteration has passed
+        if (iter >= 0):
+
+            # cache both of the vector so a shuffle join happends (otherwise it times out on big data)
+            mapped1 = rnew.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+            mapped2 = rold.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+
+            # calculate the norm
+            diff = mapped1.join(mapped2)
+            diff = diff.map(lambda x: abs(x[1][0] - x[1][1]))
+            diff = diff.max()
+
+            # output for sanity check
             print("Iteration ", iter, " just finished with first order norm: ", diff, " approximated elapsed time = ",
-                 (datetime.now() - timer).total_seconds())
+                  (datetime.now() - timer).total_seconds())
+
+            # unpersist to save memory space.
             mapped1.unpersist()
             mapped2.unpersist()
         else:
             print("Iteration ", iter, " just finished, approximated elapsed time = ",
-                 (datetime.now() - timer).total_seconds())
+                  (datetime.now() - timer).total_seconds())
 
     # sort by descending order of page ranking values
     result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False)
@@ -91,36 +117,39 @@ def pageRank(data):
 
 
 def addEntries(entry):
-    entry=entry.split("\t")
-    yield (int(entry[0].strip()),[int(entry[1].strip())])
-    yield (int(entry[1].strip()),[])
+    entry = entry.split("\t")
+    yield (int(entry[0].strip()), [int(entry[1].strip())])
+    yield (int(entry[1].strip()), [])
+
 
 if __name__ == '__main__':
+    # set optimal parameters to run the algorithms
     conf = SparkConf()
+
+    # disable all the timeouts so they don't cause any trouble when running big data
     conf.set("spark.network.timeout", "36001s")
     conf.set("spark.executor.heartbeatInterval", "36000s")
     conf.set("spark.storage.blockManagerSlaveTimeoutMs", "36000s")
     conf.set("spark.worker.timeout", "36000s")
     conf.set("spark.sql.broadcastTimeout", "36000s")
+
+    # give both executors an drivers enough memory so they can execute faster, the exact numbers can be adjusted
     conf.set("spark.executor.memory", "5g")
     conf.set("spark.driver.memory", "8g")
     conf.set("spark.worker.cleanup.enabled", "true")
-    sc = SparkContext("local[3]", "PageRanking",conf=conf)
+    sc = SparkContext("local[3]", "PageRanking", conf=conf)
     deadendaccumulator = sc.accumulator(0)
-
 
     # filtering mini database to be of form (from node, list of to nodes)
     data = sc.textFile("./Dataset/web-Google.txt").filter(lambda l: not str(l).startswith("#")) \
-        .flatMap(addEntries)\
-        .reduceByKey(lambda x,y:x+y)
-    # data = sc.parallelize([(0, [2]), (1, [2]), (2, [0, 1, 3]), (3, [])])
+        .flatMap(addEntries) \
+        .reduceByKey(lambda x, y: x + y)
 
-    #    t=data.collect()
-
+    # pass the input to pagerank algorithm
     result = pageRank(data)
 
     # write result to csv file
     result = result.map(lambda line: str(line)[1:-1])
-    rankFile = open('ranking_google_'+str(teleportationProbability)+'.csv', 'w')
+    rankFile = open('ranking_google_' + str(teleportationProbability) + '.csv', 'w')
     rankFile.write("nodeID,pageRankScore\n")
     rankFile.write("\n".join(result.collect()))
