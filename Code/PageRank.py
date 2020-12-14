@@ -57,35 +57,63 @@ def updateReduce(next):
 
 
 def pageRank(data):
+    #x[0] = node x
+    #1/N = initial pagerank score
+    #x[1] = outlinks
     data = data.map(lambda x: ((x[0], 1 / N), x[1]))
+
+    # initial variables
     rold = None
     rnew = data
     iter = 0
+
+    # set initial error to be highest possible, and start iterating.
     diff = sys.float_info.max
     eps = 0.000001
     while diff > eps:
         timer = datetime.now()  # timer
+
         iter += 1  # advance iteration counter for analytics
+
         rold = rnew  # store old scores
         rnew = rold.flatMap(updateIteration)  # flatmap the input to get a list of (node, PR score)
+
+        # deadend will get detected during the previous flatmap, and their values are accumulated in the accumulator.
+        # we're going to get the value, broadcast it into all the executors, then reset the accumulator for next
+        # iteration.
         global deadendpool
         val = deadendaccumulator.value
         deadendpool = sc.broadcast(val)
         deadendaccumulator.add(-val)  # reset deadendpool
+
+        # group the PR scores by key(node id), and sent it to the 'reduce' function which returns a new vector that
+        # can directly be used in the next iteration
         rnew = rnew.groupByKey().map(updateReduce)
+
+        # calculate difference after the given iteration has passed
         if (iter >= 0):
+
+            # cache both of the vector so a shuffle join happends (otherwise it times out on big data)
             mapped1 = rnew.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
             mapped2 = rold.map(lambda x: x[0]).persist(storageLevel=StorageLevel.MEMORY_AND_DISK)
+
+            # calculate the norm
             diff = mapped1.join(mapped2)
             diff = diff.map(lambda x: abs(x[1][0] - x[1][1]))
             diff = diff.max()
+
+            # output for sanity check
             print("Iteration ", iter, " just finished with first order norm: ", diff, " approximated elapsed time = ",
                   (datetime.now() - timer).total_seconds())
+
+            # unpersist to save memory space.
             mapped1.unpersist()
             mapped2.unpersist()
         else:
             print("Iteration ", iter, " just finished, approximated elapsed time = ",
                   (datetime.now() - timer).total_seconds())
+
+    # sort by descending order of page ranking values
     result = rnew.map(lambda x: x[0]).sortBy(lambda x: x[1], False)
     return result
 
