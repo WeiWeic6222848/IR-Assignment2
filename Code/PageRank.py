@@ -57,7 +57,9 @@ def updateReduce(next):
 
 
 def pageRank(data):
-    # initial pagerank score
+    #x[0] = node x
+    #1/N = initial pagerank score
+    #x[1] = outlinks
     data = data.map(lambda x: ((x[0], 1 / N), x[1]))
 
     # initial variables
